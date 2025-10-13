@@ -23,6 +23,7 @@ if (!TELEGRAM_TOKEN) {
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
+// ================= FUNCIONES BASE =================
 async function loadReminders() {
   try {
     const txt = await fs.readFile(REMINDERS_FILE, 'utf8');
@@ -41,7 +42,11 @@ function scheduleReminder(rem) {
   if (when <= new Date()) return;
   schedule.scheduleJob(rem.id, when, async () => {
     try {
-      await bot.sendMessage(rem.chatId, `⏰ *Recordatorio*: ${rem.text}\n\n💖 _Con cariño, ${BOT_NAME}_`, { parse_mode: 'Markdown' });
+      await bot.sendMessage(
+        rem.chatId,
+        `⏰ *Recordatorio*: ${rem.text}\n\n💖 _Con cariño, ${BOT_NAME}_`,
+        { parse_mode: 'Markdown' }
+      );
       const arr = await loadReminders();
       const r = arr.find(x => x.id === rem.id);
       if (r) { r.sent = true; await saveReminders(arr); }
@@ -51,22 +56,33 @@ function scheduleReminder(rem) {
   });
 }
 
+// Al iniciar, reprogramar recordatorios pendientes
 (async () => {
   const arr = await loadReminders();
   arr.filter(r => !r.sent).forEach(scheduleReminder);
   console.log(`Recordatorios cargados: ${arr.length}`);
 })();
 
-// Simple fallback canned replies for "free API" mode
+// ================== FUNCIONES NUEVAS ==================
+// 🗑️ Eliminar recordatorios por texto
+async function deleteRemindersByText(chatId, text) {
+  const arr = await loadReminders();
+  const lowered = text.toLowerCase();
+  const filtered = arr.filter(r => !(r.chatId === chatId && r.text.toLowerCase().includes(lowered)));
+  const deletedCount = arr.length - filtered.length;
+  await saveReminders(filtered);
+  return deletedCount;
+}
+
+// ================== RESPUESTAS GENERADAS ==================
 const CANNED_REPLIES = [
   `¡Hola ${WIFE_NAME}! 💕 Estoy aquí para acompañarte. ¿En qué te puedo ayudar hoy?`,
   `Eres increíble, recuerda respirar y darte un momento para ti. 🌸`,
-  `¡Tú puedes! �� Cada paso cuenta — estoy contigo.`,
+  `¡Tú puedes! 💪 Cada paso cuenta — estoy contigo.`,
   `Si necesitas, puedo recordarte tus tareas o enviarte un mensaje de ánimo en cualquier momento. 💖`
 ];
 
 function cannedReplyFor(text) {
-  // Simple heuristics: if message contains 'cansad' or 'trist' -> empathetic reply
   const low = text.toLowerCase();
   if (low.includes('cans') || low.includes('agot') || low.includes('fatiga')) {
     return `Siento que estás cansada 💗. Recuerda descansar un poquito, estás haciendo lo mejor que puedes. Estoy contigo.`;
@@ -77,14 +93,12 @@ function cannedReplyFor(text) {
   if (low.includes('gracias') || low.includes('ok') || low.includes('perfecto')) {
     return `¡Con gusto! 💕 Me alegra ayudar.`;
   }
-  // default: random motivational line
   return CANNED_REPLIES[Math.floor(Math.random() * CANNED_REPLIES.length)];
 }
 
 async function generateReply(text) {
-  if (!openai) {
-    return cannedReplyFor(text);
-  }
+  if (!openai) return cannedReplyFor(text);
+
   try {
     const resp = await openai.responses.create({
       model: 'gpt-4o-mini',
@@ -95,14 +109,13 @@ async function generateReply(text) {
       temperature: 0.8,
       max_output_tokens: 400
     });
-    // Extract text
+
     if (resp.output_text) return resp.output_text;
-    // fallback parsing
-    try {
-      if (resp.output && Array.isArray(resp.output)) {
-        return resp.output.map(o => o.content?.map(c => c.text || '').join('') || '').join('\n');
-      }
-    } catch (e) {}
+
+    if (resp.output && Array.isArray(resp.output)) {
+      return resp.output.map(o => o.content?.map(c => c.text || '').join('') || '').join('\n');
+    }
+
     return JSON.stringify(resp);
   } catch (e) {
     console.error('Error OpenAI:', e);
@@ -110,20 +123,31 @@ async function generateReply(text) {
   }
 }
 
+// ================== BOT PRINCIPAL ==================
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = (msg.text || '').trim();
   if (!text) return;
 
-  if (text.toLowerCase() === '/start') {
+  const low = text.toLowerCase();
+
+  // ====== INICIO / AYUDA ======
+  if (low === '/start') {
     return bot.sendMessage(chatId, `Hola 💖 Soy ${BOT_NAME}, tu asistente. Escribe "ayuda" para ver comandos.`);
   }
 
-  if (text.toLowerCase() === 'ayuda' || text.toLowerCase() === '/help') {
-    return bot.sendMessage(chatId, `Comandos:\n• /recordatorio <texto con fecha>  → Ej: /recordatorio Mañana a las 9 llamar al médico\n• /misrecordatorios  → lista tus recordatorios\n• Escribe cualquier cosa para conversar con ${BOT_NAME}`);
+  if (low === 'ayuda' || low === '/help') {
+    return bot.sendMessage(chatId,
+      `Comandos:\n\n` +
+      `• /recordatorio <texto con fecha>\n   Ej: /recordatorio Mañana a las 9 llamar al médico\n` +
+      `• /misrecordatorios → lista tus recordatorios\n` +
+      `• /borrar <texto> → elimina recordatorios que contengan ese texto\n\n` +
+      `También puedes decir frases naturales como "borra el recordatorio del médico" 💕`
+    );
   }
 
-  if (text.toLowerCase().startsWith('/recordatorio')) {
+  // ====== AGREGAR RECORDATORIO ======
+  if (low.startsWith('/recordatorio')) {
     const payload = text.replace(/^\/recordatorio\s*/i, '').trim();
     if (!payload) return bot.sendMessage(chatId, 'Escribe: /recordatorio mañana a las 9 llamar al médico');
 
@@ -146,15 +170,36 @@ bot.on('message', async (msg) => {
     return bot.sendMessage(chatId, `✅ Guardado para ${date.toLocaleString()}: ${reminderText}`);
   }
 
-  if (text.toLowerCase() === '/misrecordatorios') {
+  // ====== LISTAR RECORDATORIOS ======
+  if (low === '/misrecordatorios') {
     const arr = await loadReminders();
     const mine = arr.filter(r => r.chatId === chatId && !r.sent);
     if (mine.length === 0) return bot.sendMessage(chatId, 'No tienes recordatorios pendientes.');
     const list = mine.map(r => `• ${new Date(r.date).toLocaleString()} — ${r.text}`).join('\n');
-    return bot.sendMessage(chatId, `Tus recordatorios:\n${list}`);
+    return bot.sendMessage(chatId, `🗓️ Tus recordatorios:\n${list}`);
   }
 
-  // fallback: generate reply (OpenAI if configured, otherwise canned)
+  // ====== ELIMINAR RECORDATORIOS ======
+  if (low.startsWith('/borrar')) {
+    const query = text.replace(/^\/borrar\s*/i, '').trim();
+    if (!query) return bot.sendMessage(chatId, 'Por favor indica qué recordatorio quieres borrar. Ej: /borrar médico');
+    const count = await deleteRemindersByText(chatId, query);
+    if (count > 0) return bot.sendMessage(chatId, `🗑️ Eliminé ${count} recordatorio(s) que contenían "${query}".`);
+    else return bot.sendMessage(chatId, `❌ No encontré ningún recordatorio con "${query}".`);
+  }
+
+  // ====== MODO NATURAL (borra/elimina sin comando) ======
+  if (low.startsWith('borra') || low.startsWith('elimina')) {
+    const words = text.split(' ');
+    words.shift();
+    const query = words.join(' ').trim();
+    if (!query) return bot.sendMessage(chatId, '¿Qué recordatorio quieres eliminar? ❤️');
+    const count = await deleteRemindersByText(chatId, query);
+    if (count > 0) return bot.sendMessage(chatId, `🗑️ Eliminé ${count} recordatorio(s) que contenían "${query}".`);
+    else return bot.sendMessage(chatId, `❌ No encontré ningún recordatorio con "${query}".`);
+  }
+
+  // ====== RESPUESTA CON IA ======
   try {
     const reply = await generateReply(text);
     await bot.sendMessage(chatId, reply);
