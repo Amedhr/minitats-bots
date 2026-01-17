@@ -5,6 +5,7 @@ import schedule from 'node-schedule';
 import fs from 'fs/promises';
 import path from 'path';
 import dotenv from 'dotenv';
+import express from 'express';
 dotenv.config();
 
 // ================== CONFIG ==================
@@ -19,6 +20,8 @@ const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
 const ADMIN_ID = process.env.ADMIN_ID; // 👈 TU CHAT ID
 const WIFE_NAME = process.env.WIFE_NAME || 'amor';
 const BOT_NAME = 'Minitats';
+const app = express();
+const PORT = process.env.PORT || 3000;
 
 if (!TELEGRAM_TOKEN) {
   console.error('⚠️ Falta TELEGRAM_TOKEN');
@@ -189,6 +192,18 @@ bot.on('message', async (msg) => {
 
   await saveUser(chatId);
   const low = text.toLowerCase();
+
+  app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    bot: 'online',
+    time: new Date().toISOString()
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Health server running on port ${PORT}`);
+});
 
   // ===== ADMIN =====
   if (low === '/estado' && String(chatId) === ADMIN_ID) {
