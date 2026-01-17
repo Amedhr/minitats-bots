@@ -1,7 +1,7 @@
 {
   "name": "minitats-telegram-bot",
   "version": "1.0.0",
-  "description": "Minitats \u2013 Asistente virtual para Telegram (recordatorios + respuestas motivadoras).",
+  "description": "Minitats – Asistente virtual para Telegram (recordatorios + respuestas motivadoras).",
   "main": "index.js",
   "type": "module",
   "scripts": {
