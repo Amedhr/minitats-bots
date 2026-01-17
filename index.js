@@ -15,6 +15,12 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
 const WIFE_NAME = process.env.WIFE_NAME || 'amor';
 const BOT_NAME = 'Minitats';
+const FIVE_MIN = 5 * 60 * 1000;
+const last = status.lastStart ? new Date(status.lastStart).getTime() : 0;
+const nowTime = Date.now();
+
+const isRestart = last && (nowTime - last) > FIVE_MIN;
+
 
 if (!TELEGRAM_TOKEN) {
   console.error('⚠️ Por favor configura TELEGRAM_TOKEN en .env (obtenlo con @BotFather)');
@@ -107,11 +113,24 @@ function scheduleReminder(rem) {
 async function deleteRemindersByText(chatId, text) {
   const arr = await loadReminders();
   const lowered = text.toLowerCase();
-  const filtered = arr.filter(r => !(r.chatId === chatId && r.text.toLowerCase().includes(lowered)));
-  const deletedCount = arr.length - filtered.length;
+
+  const toDelete = arr.filter(
+    r => r.chatId === chatId && r.text.toLowerCase().includes(lowered)
+  );
+
+  toDelete.forEach(r => {
+    const job = schedule.scheduledJobs[r.id];
+    if (job) job.cancel();
+  });
+
+  const filtered = arr.filter(
+    r => !(r.chatId === chatId && r.text.toLowerCase().includes(lowered))
+  );
+
   await saveReminders(filtered);
-  return deletedCount;
+  return toDelete.length;
 }
+
 
 // ================== RESPUESTAS GENERADAS ==================
 const CANNED_REPLIES = [
