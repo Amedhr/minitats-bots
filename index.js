@@ -5,6 +5,7 @@ import schedule from 'node-schedule';
 import fs from 'fs/promises';
 import path from 'path';
 import dotenv from 'dotenv';
+import schedule from 'node-schedule';
 dotenv.config();
 
 const BASE = path.resolve('.');
