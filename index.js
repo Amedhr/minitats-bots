@@ -6,36 +6,46 @@ import fs from 'fs/promises';
 import path from 'path';
 import dotenv from 'dotenv';
 import express from 'express';
+
 dotenv.config();
 
-// ================== CONFIG ==================
+/* ================== CONFIG ================== */
 const BASE = path.resolve('.');
 const REMINDERS_FILE = path.join(BASE, 'reminders.json');
 const USERS_FILE = path.join(BASE, 'users.json');
 const STATUS_FILE = path.join(BASE, 'status.json');
-const BACKUP_DIR = path.join(BASE, 'backups');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
-const ADMIN_ID = process.env.ADMIN_ID; // 👈 TU CHAT ID
 const WIFE_NAME = process.env.WIFE_NAME || 'amor';
 const BOT_NAME = 'Minitats';
-const app = express();
-const PORT = process.env.PORT || 3000;
 
 if (!TELEGRAM_TOKEN) {
   console.error('⚠️ Falta TELEGRAM_TOKEN');
   process.exit(1);
 }
 
+/* ================== EXPRESS (Railway) ================== */
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send('🤖 Minitats activo');
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 HTTP server escuchando en puerto ${PORT}`);
+});
+
+/* ================== TELEGRAM ================== */
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
-// ================== HELPERS ==================
-async function ensureDir(dir) {
-  try { await fs.mkdir(dir, { recursive: true }); } catch {}
-}
-
+/* ================== HELPERS ================== */
 async function loadJSON(file, fallback) {
   try {
     const txt = await fs.readFile(file, 'utf8');
@@ -46,10 +56,10 @@ async function loadJSON(file, fallback) {
 }
 
 async function saveJSON(file, data) {
-  await fs.writeFile(file, JSON.stringify(data, null, 2), 'utf8');
+  await fs.writeFile(file, JSON.stringify(data, null, 2));
 }
 
-// ================== USERS ==================
+/* ================== USERS ================== */
 async function saveUser(chatId) {
   const users = await loadJSON(USERS_FILE, []);
   if (!users.includes(chatId)) {
@@ -61,19 +71,13 @@ async function saveUser(chatId) {
 async function alertAllUsers(message) {
   const users = await loadJSON(USERS_FILE, []);
   for (const id of users) {
-    try { await bot.sendMessage(id, message); } catch {}
+    try {
+      await bot.sendMessage(id, message);
+    } catch {}
   }
 }
 
-// ================== REMINDERS ==================
-async function loadReminders() {
-  return await loadJSON(REMINDERS_FILE, []);
-}
-
-async function saveReminders(arr) {
-  await saveJSON(REMINDERS_FILE, arr);
-}
-
+/* ================== REMINDERS ================== */
 function scheduleReminder(rem) {
   const when = new Date(rem.date);
   if (when <= new Date()) return;
@@ -85,18 +89,42 @@ function scheduleReminder(rem) {
       { parse_mode: 'Markdown' }
     );
 
-    const arr = await loadReminders();
+    const arr = await loadJSON(REMINDERS_FILE, []);
     const r = arr.find(x => x.id === rem.id);
-    if (r) { r.sent = true; await saveReminders(arr); }
+    if (r) {
+      r.sent = true;
+      await saveJSON(REMINDERS_FILE, arr);
+    }
   });
 }
 
-async function deleteRemindersByText(chatId, query) {
-  const arr = await loadReminders();
-  const q = query.toLowerCase();
+/* ================== STARTUP CHECK ================== */
+(async () => {
+  const status = await loadJSON(STATUS_FILE, { lastStart: null });
+  const isRestart = status.lastStart !== null;
+
+  status.lastStart = new Date().toISOString();
+  await saveJSON(STATUS_FILE, status);
+
+  const reminders = await loadJSON(REMINDERS_FILE, []);
+  reminders.filter(r => !r.sent).forEach(scheduleReminder);
+
+  console.log(`⏰ Recordatorios cargados: ${reminders.length}`);
+
+  if (isRestart) {
+    await alertAllUsers(
+      '⚠️ Estuve fuera de línea un momento, pero ya estoy de regreso 💕'
+    );
+  }
+})();
+
+/* ================== DELETE REMINDERS ================== */
+async function deleteRemindersByText(chatId, text) {
+  const arr = await loadJSON(REMINDERS_FILE, []);
+  const lowered = text.toLowerCase();
 
   const toDelete = arr.filter(
-    r => r.chatId === chatId && r.text.toLowerCase().includes(q)
+    r => r.chatId === chatId && r.text.toLowerCase().includes(lowered)
   );
 
   toDelete.forEach(r => {
@@ -105,87 +133,43 @@ async function deleteRemindersByText(chatId, query) {
   });
 
   const filtered = arr.filter(r => !toDelete.includes(r));
-  await saveReminders(filtered);
+  await saveJSON(REMINDERS_FILE, filtered);
+
   return toDelete.length;
 }
 
-// ================== BACKUP ==================
-async function backupReminders() {
-  await ensureDir(BACKUP_DIR);
-  const data = await loadReminders();
-  const file = path.join(
-    BACKUP_DIR,
-    `reminders-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
-  );
-  await saveJSON(file, data);
-}
-
-// ================== STATUS / RESTART ==================
-async function loadStatus() {
-  return await loadJSON(STATUS_FILE, { lastStart: null });
-}
-
-(async () => {
-  const status = await loadStatus();
-  const now = Date.now();
-  const FIVE_MIN = 5 * 60 * 1000;
-
-  const last = status.lastStart ? new Date(status.lastStart).getTime() : 0;
-  const isRestart = last && (now - last) > FIVE_MIN;
-
-  status.lastStart = new Date(now).toISOString();
-  await saveJSON(STATUS_FILE, status);
-
-  const reminders = await loadReminders();
-  reminders.filter(r => !r.sent).forEach(scheduleReminder);
-
-  await backupReminders();
-
-  if (isRestart) {
-    await alertAllUsers(
-      '⚠️ Estuve fuera de línea unos momentos, pero ya volví 💕'
-    );
-  }
-
-  console.log(`🤖 ${BOT_NAME} listo`);
-})();
-
-// ================== RESPUESTAS ==================
-const CANNED = [
-  `Estoy contigo ${WIFE_NAME} 💖`,
-  `Respira, todo va a estar bien 🌸`,
-  `Paso a paso, tú puedes 💪`
+/* ================== AI / RESPUESTAS ================== */
+const CANNED_REPLIES = [
+  `¡Hola ${WIFE_NAME}! 💕 Estoy aquí contigo.`,
+  `Eres increíble 🌸`,
+  `Paso a paso, lo estás haciendo genial 💪`,
+  `Cuenta conmigo siempre 💖`
 ];
 
-function cannedReply(text) {
+function cannedReplyFor(text) {
   const low = text.toLowerCase();
-  if (low.includes('trist') || low.includes('mal')) {
-    return `Aquí estoy contigo 💕`;
-  }
-  return CANNED[Math.floor(Math.random() * CANNED.length)];
+  if (low.includes('cans')) return 'Descansa un poquito 💗';
+  if (low.includes('trist')) return 'Estoy contigo 💖';
+  return CANNED_REPLIES[Math.floor(Math.random() * CANNED_REPLIES.length)];
 }
 
 async function generateReply(text) {
-  if (!openai) return cannedReply(text);
+  if (!openai) return cannedReplyFor(text);
 
   try {
     const r = await openai.responses.create({
       model: 'gpt-4o-mini',
-      input: [
-        { role: 'system', content: `Eres ${BOT_NAME}, cariñosa y motivadora.` },
-        { role: 'user', content: text }
-      ],
-      temperature: 0.8,
+      input: text,
       max_output_tokens: 200
     });
-    return r.output_text || cannedReply(text);
+    return r.output_text || cannedReplyFor(text);
   } catch {
-    return cannedReply(text);
+    return cannedReplyFor(text);
   }
 }
 
-// ================== BOT ==================
-bot.on('message', async (msg) => {
+/* ================== BOT ================== */
+bot.on('message', async msg => {
   const chatId = msg.chat.id;
   const text = (msg.text || '').trim();
   if (!text) return;
@@ -193,35 +177,28 @@ bot.on('message', async (msg) => {
   await saveUser(chatId);
   const low = text.toLowerCase();
 
-  app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-    bot: 'online',
-    time: new Date().toISOString()
-  });
-});
-
-app.listen(PORT, () => {
-  console.log(`🌐 Health server running on port ${PORT}`);
-});
-
-  // ===== ADMIN =====
-  if (low === '/estado' && String(chatId) === ADMIN_ID) {
-    return bot.sendMessage(chatId, '🟢 Bot activo y estable');
-  }
-
-  // ===== COMANDOS =====
   if (low === '/start') {
     return bot.sendMessage(chatId, `Hola 💖 Soy ${BOT_NAME}`);
+  }
+
+  if (low === '/misrecordatorios') {
+    const arr = await loadJSON(REMINDERS_FILE, []);
+    const mine = arr.filter(r => r.chatId === chatId && !r.sent);
+    if (!mine.length) return bot.sendMessage(chatId, 'No tienes recordatorios.');
+    return bot.sendMessage(
+      chatId,
+      mine.map(r => `• ${new Date(r.date).toLocaleString()} — ${r.text}`).join('\n')
+    );
   }
 
   if (low.startsWith('/recordatorio')) {
     const payload = text.replace('/recordatorio', '').trim();
     const parsed = chrono.parse(payload, new Date(), { forwardDate: true });
-    if (!parsed.length) return bot.sendMessage(chatId, 'No entendí la fecha');
+    if (!parsed.length) return bot.sendMessage(chatId, 'No entendí la fecha.');
 
     const date = parsed[0].start.date();
-    const reminderText = payload.replace(parsed[0].text, '').trim() || 'Recordatorio';
+    let reminderText = payload.replace(parsed[0].text, '').trim();
+    if (!reminderText) reminderText = 'Recordatorio';
 
     const rem = {
       id: `r-${Date.now()}`,
@@ -231,31 +208,20 @@ app.listen(PORT, () => {
       sent: false
     };
 
-    const arr = await loadReminders();
+    const arr = await loadJSON(REMINDERS_FILE, []);
     arr.push(rem);
-    await saveReminders(arr);
+    await saveJSON(REMINDERS_FILE, arr);
     scheduleReminder(rem);
 
     return bot.sendMessage(chatId, `✅ Guardado para ${date.toLocaleString()}`);
   }
 
-  if (low === '/misrecordatorios') {
-    const arr = await loadReminders();
-    const mine = arr.filter(r => r.chatId === chatId && !r.sent);
-    if (!mine.length) return bot.sendMessage(chatId, 'No tienes recordatorios');
-    return bot.sendMessage(
-      chatId,
-      mine.map(r => `• ${new Date(r.date).toLocaleString()} — ${r.text}`).join('\n')
-    );
-  }
-
   if (low.startsWith('/borrar')) {
     const q = text.replace('/borrar', '').trim();
     const n = await deleteRemindersByText(chatId, q);
-    return bot.sendMessage(chatId, `🗑️ Eliminados: ${n}`);
+    return bot.sendMessage(chatId, n ? `🗑️ Eliminados ${n}` : 'No encontré nada.');
   }
 
-  // ===== CHAT =====
   const reply = await generateReply(text);
   await bot.sendMessage(chatId, reply);
 });
