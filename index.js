@@ -9,7 +9,7 @@ dotenv.config();
 
 const BASE = path.resolve('.');
 const REMINDERS_FILE = path.join(BASE, 'reminders.json');
-
+const STATUS_FILE = path.join(BASE, 'status.json');
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
 const WIFE_NAME = process.env.WIFE_NAME || 'amor';
