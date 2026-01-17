@@ -21,6 +21,39 @@ if (!TELEGRAM_TOKEN) {
 }
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+
+// === MONITOREO Y ALERTAS ===
+const USERS_FILE = path.join(BASE, 'users.json');
+
+async function loadUsers() {
+  try {
+    const txt = await fs.readFile(USERS_FILE, 'utf8');
+    return JSON.parse(txt || '[]');
+  } catch {
+    return [];
+  }
+}
+
+async function saveUser(chatId) {
+  const users = await loadUsers();
+  if (!users.includes(chatId)) {
+    users.push(chatId);
+    await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+  }
+}
+
+async function alertAllUsers(message) {
+  const users = await loadUsers();
+  for (const id of users) {
+    try {
+      await bot.sendMessage(id, message);
+    } catch (e) {
+      console.error('No se pudo alertar a', id);
+    }
+  }
+}
+// ================= FIN MONITOREO =================
+
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
 // ================= FUNCIONES BASE =================
@@ -61,6 +94,11 @@ function scheduleReminder(rem) {
   const arr = await loadReminders();
   arr.filter(r => !r.sent).forEach(scheduleReminder);
   console.log(`Recordatorios cargados: ${arr.length}`);
+
+    await alertAllUsers(
+    '⚠️ Aviso: el asistente estuvo fuera de línea unos momentos, pero ya estoy de vuelta 💕'
+  );
+  
 })();
 
 // ================== FUNCIONES NUEVAS ==================
@@ -127,6 +165,7 @@ async function generateReply(text) {
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = (msg.text || '').trim();
+    await saveUser(chatId);
   if (!text) return;
 
   const low = text.toLowerCase();
