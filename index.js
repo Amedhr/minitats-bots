@@ -10,7 +10,7 @@ import express from 'express';
 dotenv.config();
 
 /* ================== CONFIG ================== */
-const BASE = path.resolve('.');
+const BASE = process.cwd(); // más estable en Railway
 const REMINDERS_FILE = path.join(BASE, 'reminders.json');
 const USERS_FILE = path.join(BASE, 'users.json');
 const STATUS_FILE = path.join(BASE, 'status.json');
@@ -21,7 +21,7 @@ const WIFE_NAME = process.env.WIFE_NAME || 'amor';
 const BOT_NAME = 'Minitats';
 
 if (!TELEGRAM_TOKEN) {
-  console.error('⚠️ Falta TELEGRAM_TOKEN');
+  console.error('❌ Falta TELEGRAM_TOKEN');
   process.exit(1);
 }
 
@@ -43,14 +43,19 @@ app.listen(PORT, () => {
 
 /* ================== TELEGRAM ================== */
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+console.log('🤖 Bot de Telegram iniciado correctamente');
+
+const openai = OPENAI_API_KEY
+  ? new OpenAI({ apiKey: OPENAI_API_KEY })
+  : null;
 
 /* ================== HELPERS ================== */
 async function loadJSON(file, fallback) {
   try {
     const txt = await fs.readFile(file, 'utf8');
-    return JSON.parse(txt || JSON.stringify(fallback));
+    return JSON.parse(txt);
   } catch {
+    await fs.writeFile(file, JSON.stringify(fallback, null, 2));
     return fallback;
   }
 }
@@ -98,10 +103,10 @@ function scheduleReminder(rem) {
   });
 }
 
-/* ================== STARTUP CHECK ================== */
+/* ================== STARTUP ================== */
 (async () => {
   const status = await loadJSON(STATUS_FILE, { lastStart: null });
-  const isRestart = status.lastStart !== null;
+  const isRestart = Boolean(status.lastStart);
 
   status.lastStart = new Date().toISOString();
   await saveJSON(STATUS_FILE, status);
@@ -138,7 +143,7 @@ async function deleteRemindersByText(chatId, text) {
   return toDelete.length;
 }
 
-/* ================== AI / RESPUESTAS ================== */
+/* ================== AI ================== */
 const CANNED_REPLIES = [
   `¡Hola ${WIFE_NAME}! 💕 Estoy aquí contigo.`,
   `Eres increíble 🌸`,
@@ -184,7 +189,9 @@ bot.on('message', async msg => {
   if (low === '/misrecordatorios') {
     const arr = await loadJSON(REMINDERS_FILE, []);
     const mine = arr.filter(r => r.chatId === chatId && !r.sent);
-    if (!mine.length) return bot.sendMessage(chatId, 'No tienes recordatorios.');
+    if (!mine.length) {
+      return bot.sendMessage(chatId, 'No tienes recordatorios.');
+    }
     return bot.sendMessage(
       chatId,
       mine.map(r => `• ${new Date(r.date).toLocaleString()} — ${r.text}`).join('\n')
@@ -194,7 +201,9 @@ bot.on('message', async msg => {
   if (low.startsWith('/recordatorio')) {
     const payload = text.replace('/recordatorio', '').trim();
     const parsed = chrono.parse(payload, new Date(), { forwardDate: true });
-    if (!parsed.length) return bot.sendMessage(chatId, 'No entendí la fecha.');
+    if (!parsed.length) {
+      return bot.sendMessage(chatId, 'No entendí la fecha.');
+    }
 
     const date = parsed[0].start.date();
     let reminderText = payload.replace(parsed[0].text, '').trim();
